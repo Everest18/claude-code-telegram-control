@@ -1,0 +1,59 @@
+name: AgentRemote v3.0 Cloud Executor
+
+on:
+  repository_dispatch:
+    types: [execute-task]
+
+jobs:
+  execute:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        fetch-depth: 0
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+    
+    - name: Install dependencies
+      run: |
+        pip install anthropic requests greptile-py
+    
+    - name: Execute Task with Claude
+      id: execute
+      env:
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        GREPTILE_API_KEY: ${{ secrets.GREPTILE_API_KEY }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TASK_DESCRIPTION: ${{ github.event.client_payload.task }}
+        CHAT_ID: ${{ github.event.client_payload.chat_id }}
+        MESSAGE_ID: ${{ github.event.client_payload.message_id }}
+      run: |
+        python .github/scripts/cloud_executor.py
+    
+    - name: Send Telegram Notification
+      if: always()
+      env:
+        TELEGRAM_WEBHOOK_URL: ${{ secrets.TELEGRAM_WEBHOOK_URL }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        CHAT_ID: ${{ github.event.client_payload.chat_id }}
+        TASK_STATUS: ${{ steps.execute.outcome }}
+        TASK_RESULT: ${{ steps.execute.outputs.result }}
+      run: |
+        python .github/scripts/send_notification.py
+    
+    - name: Commit and Push Changes
+      if: steps.execute.outputs.has_changes == 'true'
+      run: |
+        git config user.name "AgentRemote Bot"
+        git config user.email "agent@agentremote.dev"
+        git add .
+        git commit -m "AgentRemote: ${{ github.event.client_payload.task }}" || echo "No changes to commit"
+        git push origin HEAD:agentremote-$(date +%Y%m%d-%H%M%S) || echo "Push failed"
